@@ -1,0 +1,4 @@
+isla-solver
+setuptools
+
+mypy
