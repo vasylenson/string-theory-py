@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: string_theory
+Version: 0.0.1
+Summary: ISLa generative testing
+Author: Marko
+Author-email: m.a.vasylenko@student.utwente.nl
+License: GNU General Public License v3.0
+Requires-Dist: isla-solver
+Requires-Dist: islearn

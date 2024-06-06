@@ -25,8 +25,9 @@ search_tree_grammar = {
 }
 
 bst= '''
-str.to.int(<tree>.<int>) > str.to.int(<tree>.<tree>[1]..<int>)
-and
+str.to.int(<int>) > 100 and str.to.int(<int>) < 200 and 
+str.len(<start>) > 60 and str.len(<start>) < 100 and
+str.to.int(<tree>.<int>) > str.to.int(<tree>.<tree>[1]..<int>) and
 str.to.int(<tree>.<int>) < str.to.int(<tree>.<tree>[2]..<int>)
 '''
 
@@ -37,5 +38,5 @@ solver = ISLaSolver(
     max_number_smt_instantiations=2,  # -s
 )
 
-for _ in range(30):
+for _ in range(60):
     print(solver.solve())

@@ -1,0 +1,55 @@
+
+# recommended structural constraints
+
+# str.len(<quotes>) <= 2 and str.len(<lambda>) > 10 and
+# exists <expression> in start:
+#     str.len(<expression>) > 20
+
+# str.len(<application>) > 20
+
+# str.len(<lambda-args>) > 3 ad
+
+
+# single variable expressions only consist of bound variables
+forall <variable-expression> expr="{<variable> varUse}": (
+    (level("EQ", "<lambda>", start, varUse)) 
+    or
+    exists <variable-declaration> decl="{<variable> varDecl}": (
+        level("GE", "<lambda>", varDecl, varUse)
+        and
+        varDecl = varUse
+    )
+)
+and
+
+# unique argument names
+forall <lambda-args> arguments:
+    forall <variable> v1 in arguments:
+        forall <variable> v2 in arguments:
+            (same_position(v1, v2) or (not v1 = v2))
+# and
+
+# # single variable expressions only consist of bound variables
+# forall <expression> expr="{<variable> varUse}":
+#     exists <lambda-args> arguments:
+#         exists <variable> varDecl in arguments:
+#             (varDecl = varUse and level("GE", "<lambda>", varDecl, varUse))
+# and
+
+# # fucntions in applications are bound variables
+# forall <application> app="({<variable> varUse}<application-args>)":
+#     exists <lambda-args> arguments:
+#         exists <variable> varDecl in arguments:
+#             (varDecl = varUse and level("GE", "<lambda>", varDecl, varUse))
+# and
+
+# # arguments in applications are bound variables
+# forall <application-args> args=" {<variable> varUse}[<application-args>]":
+#     exists <lambda-args> arguments:
+#         exists <variable> varDecl in arguments:
+#             (varDecl = varUse and level("GE", "<lambda>", varDecl, varUse))
+# and
+
+# exists <lambda> l:
+#     exists <application> a:
+#         (inside(l, a))

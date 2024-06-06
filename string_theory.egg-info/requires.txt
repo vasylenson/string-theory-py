@@ -1,3 +1,2 @@
 isla-solver
 islearn
-setuptools
