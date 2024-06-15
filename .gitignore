@@ -2,3 +2,6 @@
 .mypy_cache
 .vscode
 .hypothesis
+*.pyc
+
+string_theory.egg-info/

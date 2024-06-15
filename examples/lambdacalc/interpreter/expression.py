@@ -1,6 +1,6 @@
 from interpreter.element import Element
 from interpreter.variable import Variable
-import .lambda_element
+import lambda_element
 
 
 class Expression(Element):

@@ -4,108 +4,29 @@ from isla.language import Formula, parse_bnf, DerivationTree
 from isla.fuzzer import GrammarCoverageFuzzer
 from isla.language import Formula, ISLaUnparser
 
-from itertools import chain
+from itertools import chain, islice
 
 from islearn.learner import InvariantLearner
 from isla.solver import ISLaSolver
 
-from typing import Any, Callable, Self
+from typing import Any, Callable, Iterable
 from dataclasses import dataclass
 
+from .condition import Condition
 
-class Condition:
-    def __init__(self, description: str | int) -> None:
-        self.description = description
-        self._triggered_count = 0
-    
-    def trigger(self):
-        self._triggered_count += 1
-    
-    def reset(self):
-        self._triggered_count = 0
-    
-    def describe(self, description) -> Self:
-        '''Update the condition's description'''
-        self.description = description
-        return self
-
-    @property
-    def was_triggered(self):
-        return self._triggered_count > 0
-    
-    @property
-    def count(self):
-        return self._triggered_count
-    
-    def __and__(self, other):
-        return ConjunctiveCondition(self, other)
-
-    def __or__(self, other):
-        return DisjunctiveCondition(self, other)
-    
-    def __invert__(self):
-        return NegatedCondition(self)
+from string_theory.utils import generate_until_absolutely_cannot_anymore
 
 
-class NegatedCondition(Condition):
-    def __init__(self, condition: Condition) -> None:
-        self.condition = condition
-        self.description = f'Not ({condition.description})'
-
-    def reset(self):
-        return self.condition.reset()
-    
-    @property
-    def was_triggered(self):
-        return not self.condition.was_triggered
-    
-    @property
-    def count(self):
-        return int(self.was_triggered)
-
-    def trigger(self):
-        raise Exception('Negation conditions cannot be triggered')
-
-class ConjunctiveCondition(Condition):
-    def __init__(self, *conditions: Condition):
-        self.sub_conditions = conditions
-    
-    def trigger(self):
-        raise Exception('Combination conditions cannot be triggered')
-    
-    def reset(self):
-        for cond in self.sub_conditions:
-            cond.reset()
-
-    @property
-    def was_triggered(self) -> bool:
-        return all(c.was_triggered for c in self.sub_conditions)
-    
-    @property
-    def count(self) -> int:
-        return int(self.was_triggered)
-    
-    @property
-    def description(self) -> str:
-        return ' and '.join(c.description for c in self.sub_conditions)
-
-
-class DisjunctiveCondition(ConjunctiveCondition):
-    @property
-    def was_triggered(self):
-        return any(c.was_triggered for c in self.sub_conditions)
-    
-    @property
-    def description(self) -> str:
-        return ' or '.join(c.description for c in self.sub_conditions)
-
-
-@dataclass
+@dataclass(frozen=True)
 class ObservableTest:
     test_func: Callable[[str], Any]
     condition: Condition
     learner_options: dict | None = None
     solver_options: dict | None = None
+
+    @property
+    def name(self):
+        return self.test_func.__name__
     
 
 class ObservableTestSuite:
@@ -136,6 +57,10 @@ class ObservableTestSuite:
         self.is_verbose = False
         return self
     
+    def debug(self, *message, **kw):
+        if self.is_verbose:
+            print(str(*message), **kw)
+    
     def convert_input(self, tree: DerivationTree):
         return tree.to_string()
     
@@ -147,14 +72,16 @@ class ObservableTestSuite:
         return decorate
 
     def learn_preconditions(self, print_progress: bool = True, max_learner_retries: int = 5):
+        self.results = []  # reset results
+
         for test in self.tests:
             if print_progress:
-                print(f'\n\nLearning preconditions for {test.condition.description}')
+                self.debug(f'\n\nLearning preconditions for {test.name} ({test.condition.description})')
             def validate_condition(input: DerivationTree) -> bool:
                 test.condition.reset()
                 test.test_func(self.convert_input(input))
                 return test.condition.was_triggered
-            
+
             result = []
             tries = 0
             while len(result) == 0 and tries < max_learner_retries:
@@ -167,24 +94,34 @@ class ObservableTestSuite:
                     **(test.learner_options or {}),
                 ).learn_invariants()
                 tries += 1
-            
+
             if tries > 1:
-                print(f'tried learning invariants {tries} times.\n')
+                self.debug(f'tried learning invariants {tries} times.\n')
 
-            self.results.append((test, result))
+            self.results.append((test, list(result.keys())))
 
-            if print_progress: 
-                if len(result) == 0:
-                    print('No preconditions found')
-                    continue
-    
-                print("\n".join(map(
+            if len(result) == 0:
+                self.debug('No preconditions found')
+            else:
+                self.debug("\n".join(map(
                     lambda p: f"{p[1]}: " + ISLaUnparser(p[0]).unparse(),
                     {f: p for f, p in result.items() if p[0] > .0}.items())))
 
+        return self.results
+
+    def preconditions_for(self, test):
+        for test, preconditions in self.results:
+            if test is test:
+                return preconditions
+        return None
+
+    def set_catalogue(self, catalogue):
+        self.pattern_catalogue = catalogue
+        return self
+
     def fuzz_samples(self, property: Callable[[DerivationTree], bool], num_tries: int = 100):
-        print('Fuzzing samples', end='... ')
-        self.solver = ISLaSolver(
+        self.debug('Fuzzing samples', end='... ')
+        solver = ISLaSolver(
             grammar=self.grammar,
             formula=self.formula,
             enable_optimized_z3_queries=False,
@@ -201,9 +138,9 @@ class ObservableTestSuite:
         for _ in range(num_tries):
             if len(positive_examples) > initial_target and len(negative_examples) > initial_target:
                 break
-            
+
             try:
-                sample = self.solver.solve()
+                sample = solver.solve()
                 if property(sample):
                     positive_examples.append(sample)
                 else:
@@ -216,7 +153,7 @@ class ObservableTestSuite:
         tried = 0
         while len(positive_examples) < self.target_num_samples and tried < num_tries:
             if len(positive_examples) == 0:
-                print('no positive examples to mutate', end='... ')
+                self.debug('no positive examples to mutate', end='... ')
                 break
 
             new_positive = []
@@ -224,7 +161,7 @@ class ObservableTestSuite:
 
             all_examples = chain(iter(positive_examples), iter(negative_examples))
             for sample in all_examples:
-                mutant = self.solver.mutate(sample)
+                mutant = solver.mutate(sample)
                 if property(mutant):
                     new_positive.append(mutant)
                 else:
@@ -232,11 +169,66 @@ class ObservableTestSuite:
 
             positive_examples.extend(new_positive)
             negative_examples.extend(new_negative)
-        
-        print(f'came up with {len(positive_examples)} positive and {len(negative_examples)} negative')
-        print(f'p example: {positive_examples[len(positive_examples) // 2]}')
-        print(f'n example: {negative_examples[len(negative_examples) // 2]}')
+
+        self.debug(f'came up with {len(positive_examples)} positive and {len(negative_examples)} negative')
+        # self.debug(f'p example: {positive_examples[len(positive_examples) // 2]}')
+        # self.debug(f'n example: {negative_examples[len(negative_examples) // 2]}')
         return positive_examples, negative_examples
+
+    #TODO: allow custom preconditions
+    #TODO: setup testing custom preconditions
+    #TODO: set up the three-way benchmark
+
+    def results_accuracy(self, num_samples_per_experiment = 1000):
+        if len(self.results) == 0:
+            raise RuntimeError("No results to evaluate")
+        
+        raw_inputs = list(islice(self.test_inputs(), num_samples_per_experiment))
+        for test, preconditions in self.results:
+            for precondition in preconditions:
+                assert isinstance(precondition, Formula)
+                # measure raw results
+                try:
+                    constraint_inputs = islice(self.test_inputs(precondition), num_samples_per_experiment)
+                    raw_passing, raw_failing = self.split_on_passing(raw_inputs, test)
+                    res_passing, res_failing = self.split_on_passing(constraint_inputs, test)
+                    yield test, precondition, raw_passing, raw_failing, res_passing, res_failing
+                except:
+                    yield test, precondition, None, None, None, None
+
+    def test_inputs(self, precondition: Formula | None = None):
+        test_constraints = self.formula
+        if test_constraints is None:
+            test_constraints = precondition
+        elif precondition is not None:
+            test_constraints = test_constraints & precondition
+
+        solver = None
+        if test_constraints is not None:
+            solver = ISLaSolver(self.grammar, test_constraints)
+        else:
+            solver = ISLaSolver(self.grammar)
+
+        return generate_until_absolutely_cannot_anymore(solver)
+    
+    def split_on_passing(self, samples: Iterable, test: ObservableTest):
+        def passes(input: DerivationTree) -> bool:
+            test.condition.reset()
+            test.test_func(self.convert_input(input))
+            return test.condition.was_triggered
+        
+        passing, failing = [], []
+        for sample in samples:
+            if passes(sample):
+                passing.append(sample)
+            else:
+                failing.append(sample)
+    
+        return passing, failing
+
+def learner_results_to_formula(results: dict[Formula, tuple[float, float]]) -> Formula:
+    return ...
+            
             
 
 
