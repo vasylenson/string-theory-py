@@ -5,11 +5,12 @@ from copy import deepcopy
 from typing import Self, Iterable
 
 from string_theory.condition import Condition
-from string_theory.utils import generate_until_absolutely_cannot_anymore
+from string_theory.testing import ObservableTestSuite
+from string_theory.utils import generate_with_retries, read_bnf
 
 from isla_formalizations.xml_lang import XML_GRAMMAR
 from isla.language import parse_isla
-from isla.isla_predicates import DIRECT_CHILD_PREDICATE, COUNT_PREDICATE, IN_TREE_PREDICATE
+from isla.isla_predicates import DIRECT_CHILD_PREDICATE, COUNT_PREDICATE, IN_TREE_PREDICATE, SAME_POSITION_PREDICATE
 from isla.solver import ISLaSolver
 
 
@@ -43,6 +44,13 @@ class Task:
     deps: set[Self] | None = None
 
 
+def br_to_xml(br: str):
+    for old, new in [("'", '"'), ('(', '<'), (')', '>')]:
+        br = br.replace(old, new)
+    return br
+
+
+
 class Config:
     EL_BUILD = 'build'
     EL_TASK = 'task'
@@ -73,7 +81,7 @@ class Config:
     @classmethod
     def parse(cls, text: str, strict: bool = False):
         warn = throw_config_error if strict else print
-        xml = fromstring(text)
+        xml = fromstring(br_to_xml(text))
 
         if xml.tag != cls.EL_BUILD:
             raise ConfigError('The root must be a <build> element.')
@@ -116,7 +124,7 @@ class Config:
         if main is None:
             warn('There should be a main task')
         
-        return cls(tasks, main or tasks[0])
+        return cls(tasks, main or list(tasks.values())[0])
         
     @classmethod
     def _parse_task_data(cls, task: Element, strict: bool = False):
@@ -165,93 +173,61 @@ class Config:
 def throw_config_error(message):
     raise ConfigError(message)
 
-CONFIG_GRAMMAR = deepcopy(XML_GRAMMAR)
-CONFIG_GRAMMAR.update({
-    "<xml-open-tag>": ["<<tag-id> <xml-attribute>>", "<<tag-id>>"],
-    "<xml-openclose-tag>": ["<<tag-id> <xml-attribute>/>", "<<tag-id>/>"],
-    "<xml-close-tag>": ["</<tag-id>>"],
-    "<xml-attribute>": ["<xml-attribute> <xml-attribute>", '<attr-id>="<text>"'],
-    "<tag-id>": ["build", "task", "step", "dep"],
-    "<attr-id>": ["id", "cost", "main", "script"],
-})
+CONFIG_GRAMMAR = read_bnf('examples/config.bnf')
 
-for removed in ["<id>", "<id-start-char>",  "<id-chars>",  "<id-char>"]:
-    CONFIG_GRAMMAR.pop(removed)
-
-xml_config_isla = r'''
-(forall <xml-tree> tree="<{<tag-id> opid}[ <xml-attribute>]><inner-xml-tree></{<tag-id> clid}>" in start:
-    (= opid clid))
-and
-(<xml-openclose-tag>.<tag-id> = "dep")
+ID_DEF_USE_ISLA = '''
+forall <dep>="(dep id='{<id> dep_id}'/)" in start:
+    exists <task>="(task id='{<id> task_id}')<deps><steps>(/task)":
+        (dep_id = task_id)
 '''
 
-CONFIG_FORMULA = parse_isla(xml_config_isla, CONFIG_GRAMMAR)
+ID_DEF_USE = parse_isla(ID_DEF_USE_ISLA, CONFIG_GRAMMAR)
 
-schema_formula = '''
-# the build tag
-(exists <xml-tree> root="<{<tag-id> id}>{<inner-xml-tree> inside}<xml-close-tag>" in start: (id = "build"))
-and
-(forall <xml-tree> root="<{<tag-id> id}[ <xml-attribute>]><inner-xml-tree><xml-close-tag>" in start: (
-    (id = "build") implies direct_child(root, start)
-))
-and
+NO_SELF_DEP_ISLA = '''
+forall <dep> d="(dep id='{<id> dep_id}'/)" in start:
+    exists <task> t="(task id='{<id> task_id}')<deps><steps>(/task)":
+        ((dep_id = task_id) and (not (inside(d, t))))
+'''
 
-# only deps are self-closing
-(forall <xml-tree> dep="<{<tag-id> id}[ <xml-attribute>]/>" in start: (id = "dep"))
-and
+NO_SELF_DEP = parse_isla(NO_SELF_DEP_ISLA, CONFIG_GRAMMAR, structural_predicates={IN_TREE_PREDICATE})
 
-# only steps may contain text
-(forall <xml-tree> command="<{<tag-id> id}><text><xml-close-tag>" in start: (id = "step"))
-and
+ONE_MAIN_ISLA = '''
+forall <build> build in start:
+    (count(build, <main-true>, "1"))
+'''
 
-(forall <xml-tree> step="<{<tag-id> step_id}[ <xml-attribute>]><inner-xml-tree><xml-close-tag>" in start: (
-    (step_id = "step") implies
-    (exists <xml-tree> task="<{<tag-id> task_id}[ <xml-attribute>]><inner-xml-tree><xml-close-tag>":
-        (task_id = "task" and inside(step, task))
+ONE_MAIN = parse_isla(ONE_MAIN_ISLA, CONFIG_GRAMMAR, structural_predicates={COUNT_PREDICATE})
+
+ONE_MAIN_QUANT_ISLA = '''
+(forall <main-true> a in start:
+    forall <main-true> b in start:
+        (same_position(a, b)
     )
-))
-and
-
-(forall <xml-tree> dep="<{<tag-id> dep_id}[ <xml-attribute>]/>" in start: (
-    (dep_id = "dep") implies
-    (exists <xml-tree> task="<{<tag-id> task_id}[ <xml-attribute>]><inner-xml-tree><xml-close-tag>":
-        (task_id = "task" and inside(dep, task))
-    )
-))
-and
-
-(forall <xml-tree> el_1="<{<tag-id> el_1_id}[ <xml-attribute>]><inner-xml-tree><xml-close-tag>" in start:
-    forall <xml-tree> el_2="<{<tag-id> el_2_id}[ <xml-attribute>]><inner-xml-tree><xml-close-tag>" in start:
-    (inside(el_1, el_2) implies (not (el_1_id = el_2_id)))
 )
-# and
-
-# (exists <tag-id> task_id: (task_id = "task") )
-# forall <tag-id> step_id="step" in start:
-#     exists <xml-tree> task="<{<tag-id> task_id}[ <xml-attribute>]>{<inner-xml-tree> inner}<xml-close-tag>" in start:
-#         (task_id = "task" and inside(step_id, inner))
+and
+(exists <mb-main> main in start:
+    (main = " main='true'"))
 '''
 
-SCHEMA_FORMULA = parse_isla(schema_formula, CONFIG_GRAMMAR, structural_predicates={DIRECT_CHILD_PREDICATE, IN_TREE_PREDICATE, COUNT_PREDICATE})
+ONE_MAIN_QUANT = parse_isla(ONE_MAIN_QUANT_ISLA, CONFIG_GRAMMAR, structural_predicates={SAME_POSITION_PREDICATE})
 
-config_src = '''
-<build>
-	<task id="main_task" main="true">
-		<dep id="sub_task"/>
-		<step cost="12">sudo rm -rf</step>
-		<step script="./step1.sh" cost="30"></step>
-	</task>
-	
-	<task id="sub_task">
-		<step cost="1">echo hello</step>
-	</task>
-</build>
+UNIQUE_IDS_ISLA = '''
+forall <task>="(task id='{<id> task_id}')<deps><steps>(/task)":
+    (not (exists <task> other="(task id='{<id> other_task_id}')<deps><steps>(/task)":
+        (task_id = other_task_id)
+    ))
 '''
 
-xml = Config.parse(config_src)
-xml.build()
+UNIQUE_IDS = parse_isla(UNIQUE_IDS_ISLA, CONFIG_GRAMMAR)
 
-solver = ISLaSolver(CONFIG_GRAMMAR, CONFIG_FORMULA & SCHEMA_FORMULA)
+NO_ORPHANS_ISLA = '''
+forall <task>="(task id='{<id> task_id}')<deps><steps>(/task)":
+    exists <dep> d="(dep id='{<id> dep_id}'/)":
+        (dep_id = task_id)
+'''
 
-for _ in range(100):
-    print(solver.solve())
+NO_ORPHANS = parse_isla(NO_ORPHANS_ISLA, CONFIG_GRAMMAR)
+
+CONFIG_FORMULA = ID_DEF_USE & NO_SELF_DEP & UNIQUE_IDS & NO_ORPHANS & ONE_MAIN_QUANT
+
+inputs = generate_with_retries(ISLaSolver(CONFIG_GRAMMAR, CONFIG_FORMULA))

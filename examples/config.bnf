@@ -1,0 +1,47 @@
+<start> ::= <build>
+
+<build> ::= "(build)" <tasks> "(/build)"
+
+<tasks> ::= <task> | <task> <tasks>
+
+<task> ::= "(task id='" <id> "'" <mb-main> ")" <deps> <steps> "(/task)"
+
+<mb-main> ::= "" | <main-true>
+
+<main-true> ::= " main='true'"
+
+<deps> ::= "" | <dep> <deps>
+
+<dep> ::= "(dep id='" <id> "'/)"
+
+<steps> ::= <step> | <step> <steps>
+
+<step> ::= "(step " <cost> ")" <command> "(/step)"
+        | "(step " <cost> " " <script> ">" "(/step)"
+
+<cost> ::= "cost='" <int> "'"
+
+<script> ::= "script='" <text> "'"
+
+<id> ::= <text>
+
+<command> ::= <text>
+
+<text> ::= <char> | <char> <text>
+
+<char> ::= <letter> | <digit> | <special>
+
+<int> ::= <leaddigit> | <leaddigit><digits>
+
+<digits> ::= <digit> | <digit> <digits>
+
+<digit> ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+<leaddigit> ::= "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+<letter> ::= "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+           | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z"
+
+<special> ::= "_" | "-" | "!" | "@" | "#" | "$" | "%" | "^" | "*" 
+            | "+" | "=" | "|" | ":" | " "
+            | ";" | "," | "." | "?" | "/"
