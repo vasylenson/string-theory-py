@@ -3,5 +3,6 @@
 .vscode
 .hypothesis
 *.pyc
+__pycache__
 
 string_theory.egg-info/
