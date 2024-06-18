@@ -34,7 +34,7 @@ class ObservableTestSuite:
     def __init__(
         self, 
         grammar: Grammar, 
-        formula: Formula, 
+        formula: Formula | None = None,
         input_adapter: Callable[[DerivationTree], Any] | None = None,
         target_num_samples: int = 200,
     ) -> None:
@@ -64,9 +64,15 @@ class ObservableTestSuite:
     def convert_input(self, tree: DerivationTree):
         return tree.to_string()
     
-    def observe(self, condition: Condition, learner_options = None, solver_options = None):
+    def observe(
+        self,
+        *conditions: Condition,
+        learner_options: dict | None = None, 
+        solver_options: dict | None = None
+    ):
         def decorate(func):
-            self.tests.append(ObservableTest(func, condition, learner_options, solver_options))
+            for condition in conditions:
+                self.tests.append(ObservableTest(func, condition, learner_options, solver_options))
             return func;
         
         return decorate
@@ -84,8 +90,11 @@ class ObservableTestSuite:
 
             result = []
             tries = 0
+            positive, negative = [], []
             while len(result) == 0 and tries < max_learner_retries:
-                positive, negative = self.fuzz_samples(validate_condition)
+                np, nn = self.fuzz_samples(validate_condition)
+                positive.extend(np)
+                negative.extend(nn)
                 result: dict[Formula, tuple[float, float]] = InvariantLearner(
                     grammar=self.grammar,
                     prop=validate_condition,
@@ -124,10 +133,10 @@ class ObservableTestSuite:
         solver = ISLaSolver(
             grammar=self.grammar,
             formula=self.formula,
-            enable_optimized_z3_queries=False,
-            max_number_free_instantiations=50,
-            max_number_smt_instantiations=50,
-            max_number_tree_insertion_results=20,
+            # enable_optimized_z3_queries=False,
+            # max_number_free_instantiations=50,
+            # max_number_smt_instantiations=50,
+            # max_number_tree_insertion_results=20,
         )
 
         positive_examples = []

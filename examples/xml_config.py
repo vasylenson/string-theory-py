@@ -3,15 +3,22 @@ from dataclasses import dataclass
 from copy import deepcopy
 
 from typing import Self, Iterable
+import sys
 
 from string_theory.condition import Condition
 from string_theory.testing import ObservableTestSuite
 from string_theory.utils import generate_with_retries, read_bnf
 
-from isla_formalizations.xml_lang import XML_GRAMMAR
 from isla.language import parse_isla
-from isla.isla_predicates import DIRECT_CHILD_PREDICATE, COUNT_PREDICATE, IN_TREE_PREDICATE, SAME_POSITION_PREDICATE
+from isla.isla_predicates import COUNT_PREDICATE, IN_TREE_PREDICATE, SAME_POSITION_PREDICATE
 from isla.solver import ISLaSolver
+
+c_repeating_id = Condition('Found repeating IDs')
+c_circular_dependencies = Condition('There was a circular dependency')
+c_missing_dependencies = Condition('For a dependency, no task with matching ID was found')
+c_multiple_entry_points = Condition('Multiple tasks are marked an entry point')
+c_no_entry_points = Condition('No tasks are an entry point')
+c_orphaned_tasks = None and Condition('No tasks are an entry point')
 
 
 class ConfigError(Exception):
@@ -62,8 +69,12 @@ class Config:
         self.main = main
 
     def build(self):
-        total_cost = self.perform(self.main)
-        print('Finished with total cost', total_cost)
+        try:
+            total_cost = self.perform(self.main)
+            print('Finished with total cost', total_cost)
+        except RecursionError:
+            c_circular_dependencies.trigger()
+            print('Failed most likely due to circular dependency')
     
     def perform(self, task: Task) -> int:
         cost = 0
@@ -79,8 +90,8 @@ class Config:
         return cost
 
     @classmethod
-    def parse(cls, text: str, strict: bool = False):
-        warn = throw_config_error if strict else print
+    def parse(cls, text: str, strict: bool = False, silent: bool = False):
+        warn = (lambda _: ...) if silent else throw_config_error if strict else print
         xml = fromstring(br_to_xml(text))
 
         if xml.tag != cls.EL_BUILD:
@@ -97,6 +108,7 @@ class Config:
             task = cls._parse_task_data(task, strict)
 
             if task.id in tasks:
+                c_repeating_id.trigger()
                 warn(f"Found tasks with the same id={task.id}")
 
             tasks[task.id] = task
@@ -108,11 +120,13 @@ class Config:
                 if main is None:
                     main = task
                 else:
+                    c_multiple_entry_points.trigger()
                     warn('There should only be one main <task>')
                     
             deps = []
             for dep_id in task.dep_ids:
                 if dep_id not in tasks:
+                    c_missing_dependencies.trigger()
                     warn('<dep> pointing to an unknown task')
                     
                     continue
@@ -122,6 +136,7 @@ class Config:
             task.deps = deps
         
         if main is None:
+            c_no_entry_points.trigger()
             warn('There should be a main task')
         
         return cls(tasks, main or list(tasks.values())[0])
@@ -230,4 +245,30 @@ NO_ORPHANS = parse_isla(NO_ORPHANS_ISLA, CONFIG_GRAMMAR)
 
 CONFIG_FORMULA = ID_DEF_USE & NO_SELF_DEP & UNIQUE_IDS & NO_ORPHANS & ONE_MAIN_QUANT
 
-inputs = generate_with_retries(ISLaSolver(CONFIG_GRAMMAR, CONFIG_FORMULA))
+### --- TESTING ---
+
+suite = ObservableTestSuite(CONFIG_GRAMMAR)
+
+@suite.observe(
+    # c_repeating_id,
+    c_missing_dependencies,
+    c_multiple_entry_points,
+    c_no_entry_points,
+    learner_options={'activated_patterns': {"Def-Use"}}
+)
+def test_parsing(inp: str):
+    Config.parse(inp, silent=True)
+
+@suite.observe(c_circular_dependencies)
+def test_circular_deps(inp: str):
+    config = Config.parse(inp, silent=True)
+    config.build()
+
+
+if __name__ == '__main__':
+    command = sys.argv[1]
+    match command:
+        case 'learn':
+            suite.verbose().learn_preconditions()
+        case _:
+            print('Unknown command')
