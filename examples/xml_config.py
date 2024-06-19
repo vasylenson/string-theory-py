@@ -29,16 +29,16 @@ class ConfigError(Exception):
 class Command:
     text: str
 
-    def run(self):
-        print('$', self.text)
+    def run(self, print_output = True):
+        if print_output: print('$', self.text)
 
 
 @dataclass
 class Script:
     text: str
 
-    def run(self):
-        print('source', self.text)
+    def run(self, print_output = True):
+        if print_output: print('source', self.text)
 
     
 
@@ -68,15 +68,18 @@ class Config:
         self.tasks = tasks
         self.main = main
 
-    def build(self):
+    def build(self, print_steps = True):
         try:
-            total_cost = self.perform(self.main)
-            print('Finished with total cost', total_cost)
+            self.build_unsafe()
         except RecursionError:
             c_circular_dependencies.trigger()
             print('Failed most likely due to circular dependency')
     
-    def perform(self, task: Task) -> int:
+    def build_unsafe(self, print_steps = True):
+        total_cost = self.perform(self.main, print_steps)
+        if print_steps: print('Finished with total cost', total_cost)
+    
+    def perform(self, task: Task, print_steps = True) -> int:
         cost = 0
 
         for dep in task.deps:
@@ -84,7 +87,7 @@ class Config:
     
         
         for (step, step_cost) in task.steps:
-            step.run()
+            step.run(print_steps)
             cost += step_cost
         
         return cost
@@ -98,24 +101,42 @@ class Config:
             raise ConfigError('The root must be a <build> element.')
         
         # parse tasks
-        tasks: dict[str, Task] = {}
+        ids: list[str] = []  # should be sorted
+        tasks: list[Task] = []  # should be in the order corresponding to ids
         for task in xml:
             if task.tag != cls.EL_TASK:
                 warn('<build> should only contain <task> elements.')
-
                 continue
 
             task = cls._parse_task_data(task, strict)
 
-            if task.id in tasks:
-                c_repeating_id.trigger()
-                warn(f"Found tasks with the same id={task.id}")
+            swap = task.id
+            new_id_index = None
+            for i in range(len(ids)):
+                if task.id < ids[i]:
+                    continue
 
-            tasks[task.id] = task
+                if new_id_index == 0:  # is probably a bug, should be is None
+                    new_id_index = i
+
+                ids[i], swap = swap, ids[i]
+            ids.append(swap)
+
+            if new_id_index is None:
+                new_id_index = 0
+            
+            swap = task
+            for i in range(len(tasks)):
+                if i < new_id_index:
+                    continue
+
+                tasks[i], swap = swap, tasks[i]
+            tasks.append(swap)
+            
         
         # link dependencies and finding main task
         main = None
-        for task in tasks.values():
+        for task in tasks:
             if task.is_main:
                 if main is None:
                     main = task
@@ -125,21 +146,25 @@ class Config:
                     
             deps = []
             for dep_id in task.dep_ids:
-                if dep_id not in tasks:
+                if dep_id not in ids:
                     c_missing_dependencies.trigger()
                     warn('<dep> pointing to an unknown task')
                     
                     continue
 
-                deps.append(tasks[dep_id])
+                for i in range(len(ids)):
+                    if ids[i] == dep_id:
+                        deps.append(tasks[i])
+                        # break
             
             task.deps = deps
         
         if main is None:
+            main = tasks[0]
             c_no_entry_points.trigger()
             warn('There should be a main task')
         
-        return cls(tasks, main or list(tasks.values())[0])
+        return cls(tasks, main)
         
     @classmethod
     def _parse_task_data(cls, task: Element, strict: bool = False):
@@ -184,7 +209,24 @@ class Config:
                     raise ConfigError(f'Unexpected tag <{el.tag}> in <task>')
 
         return Task(id=task_id, is_main=is_main, steps=steps, dep_ids=dep_ids)
-    
+
+SAMPLE = '''
+<build>
+	<task id="main_task" main="true">
+		<dep id="sub_task"></dep>
+		<step cost="12">sudo rm -rf</step>
+		<step script="./step1.sh" cost="30"></step>
+	</task>
+	
+	<task id="sub_task">
+		<step cost="1">echo hello</step>
+	</task>
+</build>
+'''
+
+def run_sample():
+    Config.parse(SAMPLE).build()
+
 def throw_config_error(message):
     raise ConfigError(message)
 
@@ -265,10 +307,36 @@ def test_circular_deps(inp: str):
     config.build()
 
 
+def eval_fuzzing():
+    conditions = (
+        ID_DEF_USE &
+        # NO_SELF_DEP &
+        UNIQUE_IDS & 
+        NO_ORPHANS
+        # ONE_MAIN_QUANT
+    )
+
+    solver = ISLaSolver(CONFIG_GRAMMAR, conditions)
+    inputs = generate_with_retries(solver)
+
+    for num, inp in zip(range(1, 1000), inputs):
+        try:
+            print(inp)
+            Config.parse(inp.to_string(), silent=True).build_unsafe(print_steps=False)
+        except Exception as e:
+            print(e)
+            print('Found bug on try', num)
+            break
+
+
 if __name__ == '__main__':
     command = sys.argv[1]
     match command:
         case 'learn':
             suite.verbose().learn_preconditions()
+        case 'fuzzing':
+            eval_fuzzing()
+        case 'sample':
+            run_sample()
         case _:
             print('Unknown command')
