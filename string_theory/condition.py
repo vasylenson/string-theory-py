@@ -32,6 +32,14 @@ class Condition:
     
     def __invert__(self):
         return NegatedCondition(self)
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, *_):
+        if exc_type is not None:
+            self.trigger()
+
 
 
 class NegatedCondition(Condition):

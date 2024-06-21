@@ -47,7 +47,7 @@ def generate_with_retries(solver: ISLaSolver, timeout_sec: int = 20) -> Generato
         for solution in islice(generator, 30):
             yield solution
         
-        print('\n\n\nnew generator\n\n\n')
+        # print('\n\n\nnew generator\n\n\n')
         solver = ISLaSolver(solver.grammar, solver.formula)
 
 def read_bnf(filename):
